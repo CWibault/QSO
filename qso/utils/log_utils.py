@@ -1,0 +1,96 @@
+import os
+import tempfile
+from datetime import datetime
+
+import absl.flags as flags
+import ml_collections
+import numpy as np
+import wandb
+
+
+class CSVLogger:
+    """
+    CSV logger for logging metrics to a CSV file.
+    """
+    def __init__(self, path):
+        self.path = path
+        self.header = None
+        self.file = None
+        self.disallowed_types = (wandb.Image, wandb.Video, wandb.Histogram)
+
+    def log(self, row, step):
+        row['step'] = step
+        if self.file is None:
+            self.file = open(self.path, 'w')
+            if self.header is None:
+                self.header = [k for k, v in row.items() if not isinstance(v, self.disallowed_types)]
+                self.file.write(','.join(self.header) + '\n')
+            filtered_row = {k: v for k, v in row.items() if not isinstance(v, self.disallowed_types)}
+            self.file.write(','.join([str(filtered_row.get(k, '')) for k in self.header]) + '\n')
+        else:
+            filtered_row = {k: v for k, v in row.items() if not isinstance(v, self.disallowed_types)}
+            self.file.write(','.join([str(filtered_row.get(k, '')) for k in self.header]) + '\n')
+        self.file.flush()
+
+    def close(self):
+        if self.file is not None:
+            self.file.close()
+
+
+def get_exp_name(seed):
+    """
+    Return the experiment name.
+    """
+    exp_name = ''
+    exp_name += f'sd{seed:03d}_'
+    if 'SLURM_JOB_ID' in os.environ:
+        exp_name += f's_{os.environ["SLURM_JOB_ID"]}.'
+    if 'SLURM_PROCID' in os.environ:
+        exp_name += f'{os.environ["SLURM_PROCID"]}.'
+    exp_name += f'{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+
+    return exp_name
+
+
+def get_flag_dict():
+    """
+    Return the dictionary of flags.
+    """
+    flag_dict = {k: getattr(flags.FLAGS, k) for k in flags.FLAGS if '.' not in k}
+    for k in flag_dict:
+        if isinstance(flag_dict[k], ml_collections.ConfigDict):
+            flag_dict[k] = flag_dict[k].to_dict()
+    return flag_dict
+
+
+def setup_wandb(
+    entity=None,
+    project='project',
+    group=None,
+    name=None,
+    mode='online',
+):
+    """
+    Set up Weights & Biases for logging.
+    """
+    wandb_output_dir = tempfile.mkdtemp()
+    tags = [group] if group is not None else None
+
+    init_kwargs = dict(
+        config=get_flag_dict(),
+        project=project,
+        entity=entity,
+        tags=tags,
+        group=group,
+        dir=wandb_output_dir,
+        name=name,
+        settings=wandb.Settings(
+            _disable_stats=False,
+        ),
+        mode=mode,
+        save_code=True,
+    )
+
+    run = wandb.init(**init_kwargs)
+
+    return run
